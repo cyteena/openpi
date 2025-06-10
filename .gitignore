@@ -5,7 +5,6 @@ data/
 wandb/
 
 .local/
-.vscode/
 
 
 # Byte-compiled / optimized / DLL files
