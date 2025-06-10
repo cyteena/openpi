@@ -60,7 +60,17 @@ dev = [
 
 [tool.uv.sources]
 openpi-client = { workspace = true }
-lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
+lerobot = { path = "/inspire/hdd/project/embodied-multimodality/gongjingjing-25039/ytchen/lerobot" }
+
+[tool.uv]
+index-url = "http://nexus.sii.shaipower.online/repository/pypi/simple/"
+
+[pip]
+index-url = "http://nexus.sii.shaipower.online/repository/pypi/simple/"
+
+[tool.uv.pip]
+index-url = "http://nexus.sii.shaipower.online/repository/pypi/simple/"
+
 
 [tool.uv.workspace]
 members = ["packages/*"]
