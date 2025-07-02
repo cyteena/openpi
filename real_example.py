@@ -1,21 +1,11 @@
-import dataclasses
 
-import jax
-
-from openpi.models import model as _model
-from openpi.policies import droid_policy
-from openpi.policies import policy_config as _policy_config
 from openpi.shared import download
-from openpi.training import config as _config
-from openpi.training import data_loader as _data_loader
-
-from transformers import AutoProcessor
 
 # config = _config.get_config("pi0_libero")
 # checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_base")
-# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_base")
-download.maybe_download("s3://openpi-assets/checkpoints/pi0_aloha_tupperware")
-download.maybe_download("s3://openpi-assets/checkpoints/pi0_aloha_towel")
+checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_base")
+download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
+# s
 # download.maybe_download("s3://openpi-assets/checkpoints/pi0_aloha_tupperware")
 # download.maybe_download("s3://openpi-assets/checkpoints/pi0_aloha_pen_uncap")
 

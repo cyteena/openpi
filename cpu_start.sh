@@ -1,7 +1,6 @@
 export OPENPI_DATA_HOME=./data
 export HF_HOME=./data
 export HF_LEROBOT_HOME=./data
-export HF_HUB_OFFLINE=1
 export MUJOCO_GL=egl
 
 export PATH=/opt/conda/bin:~/.local/bin:$PATH
