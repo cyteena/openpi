@@ -1,0 +1,1 @@
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_fast_libero --exp-name=default --overwrite --num_workers=48
