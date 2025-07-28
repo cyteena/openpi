@@ -8,6 +8,7 @@ export WANDB_MODE=offline
 export PATH=~/.local/bin:$PATH
 
 # conda deactivate
+pip install uv
 source .venv/bin/activate
 
 git config --global user.name "Yitong Chen"

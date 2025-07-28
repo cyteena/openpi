@@ -16,6 +16,7 @@ import tyro
 import openpi.models.model as _model
 import openpi.models.pi0 as pi0
 import openpi.models.pi0_fast as pi0_fast
+import openpi.models.pi0_dfm as pi0_dfm
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -119,6 +120,7 @@ class ModelTransformFactory(GroupFactory):
                         ),
                     ],
                 )
+                
             case _model.ModelType.PI0_FAST:
                 tokenizer_cls = (
                     _tokenizer.FASTTokenizer
@@ -139,6 +141,24 @@ class ModelTransformFactory(GroupFactory):
                     outputs=[
                         _transforms.ExtractFASTActions(
                             tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
+                            action_horizon=model_config.action_horizon,
+                            action_dim=model_config.action_dim,
+                        )
+                    ],
+                )
+                
+            case _model.ModelType.PI0_DFM:
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizeFASTInputs(
+                            _tokenizer.FASTTokenizer(model_config.max_token_len),
+                        ),
+                    ],
+                    outputs=[
+                        _transforms.ExtractFASTActions(
+                            _tokenizer.FASTTokenizer(model_config.max_token_len),
                             action_horizon=model_config.action_horizon,
                             action_dim=model_config.action_dim,
                         )
@@ -634,6 +654,27 @@ _CONFIGS = [
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_dfm_fast_libero",
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_token_len=180),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+),
+
+    TrainConfig(
+        name="pi0_dfm_libero",
+        model=pi0_dfm.Pi0DiscreteFlowConfig(),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
     ),
     #
     # Fine-tuning Aloha configs.
