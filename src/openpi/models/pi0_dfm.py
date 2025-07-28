@@ -16,7 +16,7 @@ from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
+import openpi.shared.nnx_utils
 
 
 logger = logging.getLogger("openpi")
@@ -90,8 +90,7 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
-        # The external interface remains the same: it accepts continuous actions.
-        # Tokenization happens inside the model.
+        # The external interface now expects pre-tokenized actions from data preprocessing.
         image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
         image_mask_spec = jax.ShapeDtypeStruct([batch_size], jnp.bool_)
 
@@ -111,7 +110,8 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
             )
-        action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
+        # Actions are now pre-tokenized action tokens, not the original continuous actions
+        action_spec = jax.ShapeDtypeStruct([batch_size, self.max_action_token_len], jnp.int32)
 
         return observation_spec, action_spec
 
@@ -165,18 +165,16 @@ class Pi0DiscreteFlow(_model.BaseModel):
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
         # 1. consider inject time in every layer?
-        # 2. consider double the feature dim 
+        # 2. consider double the feature dim
         self.time_embed_mlp = nnx.Sequential(
             nnx.Linear(action_expert_config.width * 2, action_expert_config.width, rngs=rngs),
             nnx.gelu,
             nnx.Linear(action_expert_config.width, paligemma_config.width, rngs=rngs),
         )
         if paligemma_config.width != action_expert_config.width:
-            self.suffix_in_proj = nnx.Linear(
-                paligemma_config.width, action_expert_config.width, rngs=rngs
-            )
+            self.suffix_in_proj = nnx.Linear(paligemma_config.width, action_expert_config.width, rngs=rngs)
         else:
-            self.suffix_in_proj = nnx.identity
+            self.suffix_in_proj = lambda x: x  # Identity function
         # New output projection layer for predicting token logits
         self.head_out_proj = nnx.Linear(action_expert_config.width, self.action_vocab_size, rngs=rngs)
 
@@ -188,7 +186,10 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
     # +++ NEW: Helper functions for token ID mapping and action conversion +++
 
-# +++ NEW: A helper function to wrap the non-JAX tokenizer.decode in a pure_callback +++
+    # +++ NEW: A helper function to wrap the non-JAX tokenizer.decode in a pure_callback +++
+    # +++ DEPRECATED: The following methods are no longer used after moving tokenization to preprocessing +++
+    # They are kept for compatibility but should be removed in the future
+
     def _decode_actions_callback(self, local_indices: np.ndarray) -> np.ndarray:
         """
         Callback function for jax.pure_callback. Decodes token indices to continuous actions.
@@ -197,23 +198,27 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # The tokenizer's decode method handles batching.
         # It expects a list of lists of ints.
         decoded_actions = self.tokenizer._fast_tokenizer.decode(
-            local_indices.tolist(), 
-            time_horizon=self.config.action_horizon, 
-            action_dim=self.config.action_dim
+            local_indices.tolist(), time_horizon=self.config.action_horizon, action_dim=self.config.action_dim
         )
         return np.array(decoded_actions, dtype=np.float32)
 
     @at.typecheck
-    def _local_action_indices_to_pg_tokens(self, indices: at.Int[at.Array | np.ndarray, "..."]) -> at.Int[at.Array, "..."]:
+    def _local_action_indices_to_pg_tokens(
+        self, indices: at.Int[at.Array | np.ndarray, "..."]
+    ) -> at.Int[at.Array, "..."]:
         """Maps local action indices [0, action_vocab_size-1] to global PaliGemma token IDs."""
         # This logic is correct.
-        return self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size + indices
+        result = self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size + indices
+        return jnp.asarray(result, dtype=jnp.int32)
 
     @at.typecheck
-    def _pg_tokens_to_local_action_indices(self, pg_tokens: at.Int[at.Array | np.ndarray, "..."]) -> at.Int[at.Array, "..."]:
+    def _pg_tokens_to_local_action_indices(
+        self, pg_tokens: at.Int[at.Array | np.ndarray, "..."]
+    ) -> at.Int[at.Array, "..."]:
         """Maps global PaliGemma action token IDs back to local action indices [0, action_vocab_size-1]."""
         # This logic is correct.
-        return pg_tokens - (self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size)
+        result = pg_tokens - (self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size)
+        return jnp.asarray(result, dtype=jnp.int32)
 
     def _encode_actions_callback(self, actions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -223,15 +228,17 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # We need to get max_action_token_len from config.
         # self.config is available from __init__.
         max_len = self.config.max_action_token_len
-        
+
         bpe_tokens_list = self.tokenizer._fast_tokenizer.encode(actions[None, ...])
         local_indices = bpe_tokens_list[0]
         pg_tokens = self._local_action_indices_to_pg_tokens(jnp.array(local_indices))
 
         actual_len = len(pg_tokens)
-        
+
         # Prepare padded arrays
-        padded_tokens = np.full((max_len,), self.pg_vocab_size, dtype=np.int32) # Use a special token ID like vocab_size for padding
+        padded_tokens = np.full(
+            (max_len,), self.pg_vocab_size, dtype=np.int32
+        )  # Use a special token ID like vocab_size for padding
         mask = np.zeros((max_len,), dtype=bool)
 
         if actual_len > max_len:
@@ -241,26 +248,25 @@ class Pi0DiscreteFlow(_model.BaseModel):
         else:
             padded_tokens[:actual_len] = pg_tokens
             mask[:actual_len] = True
-            
+
         return padded_tokens, mask
 
     @at.typecheck
-    def _actions_to_tokens(self, actions: _model.Actions) -> tuple[at.Int[at.Array, "b s_a"], at.Bool[at.Array, "b s_a"]]:
+    def _actions_to_tokens(
+        self, actions: _model.Actions
+    ) -> tuple[at.Int[at.Array, "b s_a"], at.Bool[at.Array, "b s_a"]]:
         """
         Tokenizes continuous actions into padded sequences and attention masks.
         """
         max_len = self.config.max_action_token_len
-        
+
         # Define output shapes for the tuple (tokens, mask)
         result_shape_dtype = (
             jax.ShapeDtypeStruct(shape=(max_len,), dtype=jnp.int32),
-            jax.ShapeDtypeStruct(shape=(max_len,), dtype=bool)
+            jax.ShapeDtypeStruct(shape=(max_len,), dtype=bool),
         )
 
-        return jax.vmap(
-            lambda x: jax.pure_callback(self._encode_actions_callback, result_shape_dtype, x)
-        )(actions)
-
+        return jax.vmap(lambda x: jax.pure_callback(self._encode_actions_callback, result_shape_dtype, x))(actions)
 
     @at.typecheck
     def _tokens_to_actions(self, action_tokens: at.Int[at.Array, "b s_a"]) -> _model.Actions:
@@ -269,7 +275,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         This version uses jax.pure_callback to safely handle the non-JIT compatible decode function.
         """
         local_indices = self._pg_tokens_to_local_action_indices(action_tokens)
-        
+
         # Define the output shape and dtype for the callback result.
         # This is crucial for JAX to be able to JIT compile the code that calls this.
         result_shape_dtype = jax.ShapeDtypeStruct(
@@ -278,9 +284,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         )
 
         # Wrap the Python function call in pure_callback.
-        return jax.pure_callback(
-            self._decode_actions_callback, result_shape_dtype, local_indices
-        )
+        return jax.pure_callback(self._decode_actions_callback, result_shape_dtype, local_indices)
 
     @at.typecheck
     def embed_prefix(
@@ -295,7 +299,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
             tokens_list.append(image_tokens)
             input_mask_list.append(einops.repeat(obs.image_masks[name], "b -> b s", s=image_tokens.shape[1]))
-        
+
         if obs.tokenized_prompt is not None:
             # Using the LLM's own embedding layer is the correct and efficient approach.
             tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
@@ -345,11 +349,15 @@ class Pi0DiscreteFlow(_model.BaseModel):
         """
         preprocess_rng, time_rng, mask_rng = jax.random.split(rng, 3)
 
-        # 1. Preprocess observations and convert actions to tokens.
+        # 1. Preprocess observations and use pre-tokenized actions.
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
-        # x_1 are the ground truth tokens, with global PaliGemma IDs.
-        x_1, action_mask = self._actions_to_tokens(actions)
+        # x_1 are the ground truth tokens from data preprocessing (passed as actions), with global PaliGemma IDs.
+        x_1 = actions  # Shape: (B, S_a) - now actions are pre-tokenized
         batch_size, seq_len = x_1.shape
+
+        # For now, assume all tokens are valid (no padding mask)
+        # TODO: Add proper action_token_mask support if needed
+        action_mask = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)
 
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
@@ -364,12 +372,14 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
         # Create the masked input sequence x_t.
         x_t = jnp.where(tokens_to_mask, self.mask_token_id, x_1)
+        # Ensure x_t has the correct type
+        x_t = jnp.asarray(x_t, dtype=jnp.int32)
 
         # 3. Embed prefix and suffix.
         prefix_tokens_embedded, prefix_mask = self.embed_prefix(observation)
         # Note: The time passed to the model represents "corruption", so we use (1-t).
         suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time)
-        
+
         projected_suffix_embedded = self.suffix_in_proj(suffix_tokens_embedded)
 
         # 4. Prepare for the dual-expert model pass.
@@ -422,7 +432,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         observation: _model.Observation,
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
-    ) -> _model.Actions:
+    ) -> at.Int[at.Array, "b s_a"]:
         """
         Samples actions using iterative, parallel decoding (MaskGIT-style).
         """
@@ -442,9 +452,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
         )
 
         # 2. Initialize for iterative decoding.
-        # Determine the length of the action token sequence.
-        dummy_actions = jnp.zeros((batch_size, self.config.action_horizon, self.config.action_dim))
-        action_seq_len = self._actions_to_tokens(dummy_actions).shape[1]
+        # Use the max action token length from config
+        action_seq_len = self.config.max_action_token_len
 
         # Start with a sequence of all [MASK] tokens.
         action_tokens = jnp.full((batch_size, action_seq_len), self.mask_token_id, dtype=jnp.int32)
@@ -526,6 +535,5 @@ class Pi0DiscreteFlow(_model.BaseModel):
             0, num_steps, loop_body, (action_tokens, mask_to_be_predicted, decode_rng)
         )
 
-        # 4. Decode final token sequence back to continuous actions.
-        # This part might require jax.pure_callback if tokenizer.decode is not JIT-compatible.
-        return self._tokens_to_actions(final_tokens)
+        # 4. 现在直接返回 token 序列，解码过程交由 output transform 处理
+        return final_tokens

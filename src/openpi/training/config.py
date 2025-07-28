@@ -120,7 +120,7 @@ class ModelTransformFactory(GroupFactory):
                         ),
                     ],
                 )
-                
+
             case _model.ModelType.PI0_FAST:
                 tokenizer_cls = (
                     _tokenizer.FASTTokenizer
@@ -146,22 +146,24 @@ class ModelTransformFactory(GroupFactory):
                         )
                     ],
                 )
-                
+
             case _model.ModelType.PI0_DFM:
+                # PI0_DFM uses action tokenization in data preprocessing to avoid redundant computation
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         _transforms.ResizeImages(224, 224),
-                        _transforms.TokenizeFASTInputs(
-                            _tokenizer.FASTTokenizer(model_config.max_token_len),
-                        ),
+                        _transforms.TokenizePrompt(_tokenizer.PaligemmaTokenizer(model_config.max_token_len)),
+                        # Add action tokenization in preprocessing for DFM
+                        _transforms.TokenizeDFMActions(),
                     ],
                     outputs=[
-                        _transforms.ExtractFASTActions(
+                        # 将动作 token 解码为连续动作
+                        _transforms.DecodeDFMActions(
                             _tokenizer.FASTTokenizer(model_config.max_token_len),
                             action_horizon=model_config.action_horizon,
                             action_dim=model_config.action_dim,
-                        )
+                        ),
                     ],
                 )
 
@@ -636,7 +638,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi0_fast_libero_low_mem_finetune",
-        # Here is an example of loading a pi0-FAST model for LoRA finetuning.
+        # Here is an example of loading a pi0-FAST model for LoRA fine-tuning.
         # For setting action_dim, action_horizon, and max_token_len, see the comments above.
         model=pi0_fast.Pi0FASTConfig(
             action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"
@@ -664,8 +666,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
         num_train_steps=30_000,
-),
-
+    ),
     TrainConfig(
         name="pi0_dfm_libero",
         model=pi0_dfm.Pi0DiscreteFlowConfig(),

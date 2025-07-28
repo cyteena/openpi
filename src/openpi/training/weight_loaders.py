@@ -12,6 +12,15 @@ import openpi.shared.download as download
 
 logger = logging.getLogger(__name__)
 
+# In openpi/training/weight_loaders.py
+
+
+def _sanitize_params_dict(d):
+    """Recursively converts all integer keys in a nested dict to strings."""
+    if not isinstance(d, dict):
+        return d
+    return {str(k): _sanitize_params_dict(v) for k, v in d.items()}
+
 
 @runtime_checkable
 class WeightLoader(Protocol):
@@ -84,7 +93,8 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     Returns:
         A new dictionary with the merged parameters.
     """
-    flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+    sanitized_params = _sanitize_params_dict(params)
+    flat_ref = flax.traverse_util.flatten_dict(sanitized_params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
 
     # First, take all weights that are a subset of the reference weights.

@@ -310,6 +310,165 @@ class PromptFromLeRobotTask(DataTransformFn):
         return {**data, "prompt": prompt}
 
 
+@dataclasses.dataclass(frozen=True)
+class TokenizeDFMActions(DataTransformFn):
+    """Tokenize actions for DFM models during data preprocessing.
+
+    This transform replaces the original actions with tokenized actions,
+    making them ready for the DFM model's compute_loss method.
+    """
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+
+        actions = data["actions"]
+
+        # Import here to avoid circular imports
+        from openpi.models.tokenizer import FASTTokenizer
+
+        # Create a helper function to encode actions
+        def encode_single_action(single_action):
+            """Encode a single action sequence to tokens."""
+            # Create tokenizer instance
+            tokenizer = FASTTokenizer()
+
+            # Encode using FAST tokenizer (accessing private members for compatibility)
+            # This mimics the logic from the original model
+            # Use the correct calling convention: tokenizer(actions) returns a list of lists
+            bpe_tokens_list = tokenizer._fast_tokenizer(single_action[None, ...])
+            local_indices = bpe_tokens_list[0]  # This is a Python list, not numpy array
+
+            # Convert to PaliGemma token IDs using the same mapping logic
+            pg_vocab_size = tokenizer._paligemma_tokenizer.vocab_size()
+            fast_skip_tokens = tokenizer._fast_skip_tokens
+            action_vocab_size = tokenizer._fast_tokenizer.vocab_size
+
+            # Use the same mapping logic as the model
+            pg_tokens = pg_vocab_size - fast_skip_tokens - action_vocab_size + np.array(local_indices)
+
+            return pg_tokens
+
+        # Encode the action sequence
+        pg_tokens = encode_single_action(actions)
+
+        # Get the appropriate max length from FASTTokenizer
+        # For DFM, we only need the action tokens part, not the full sequence
+        # Based on empirical observation, action tokens are typically much shorter than the full sequence
+        # We use a conservative estimate of 160 tokens for action sequences
+        max_action_token_len = 160
+
+        # Pad or truncate to max length
+        actual_len = len(pg_tokens)
+        padded_tokens = np.full(
+            (max_action_token_len,),
+            257152,  # Use a large number as padding token (should match model's pg_vocab_size)
+            dtype=np.int32,
+        )
+
+        if actual_len > max_action_token_len:
+            padded_tokens[:] = pg_tokens[:max_action_token_len]
+        else:
+            padded_tokens[:actual_len] = pg_tokens
+
+        # Replace the original actions with tokenized actions
+        # The actions field will be extracted separately by the DataLoaderImpl
+        return {
+            **data,
+            "actions": padded_tokens,  # Replace original actions with tokens
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ExtractDFMActions(DataTransformFn):
+    """Extract and decode actions from DFM model outputs."""
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # DFM models already output continuous actions directly
+        # No additional processing needed
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class DecodeDFMActions(DataTransformFn):
+    """将 DFM 输出的动作 token 解码为连续动作。"""
+
+    tokenizer: _tokenizer.FASTTokenizer
+    action_horizon: int
+    action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        # Model outputs are saved in "actions", but for DFM models they represent tokens.
+        tokens = data.pop("actions")
+
+        # 使用类似 ExtractFASTActions 的模式，但针对 DFM tokens
+        actions = self._extract_dfm_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+        return {
+            **data,
+            "actions": actions,
+        }
+
+    def _extract_dfm_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+        """提取 DFM action tokens 并解码为连续动作，类似 ExtractFASTActions 的模式"""
+
+        # 过滤掉填充 token，只保留有效的 action tokens
+        pg_vocab_size = self.tokenizer._paligemma_tokenizer.vocab_size()
+        fast_skip_tokens = self.tokenizer._fast_skip_tokens
+        action_vocab_size = self.tokenizer._fast_tokenizer.vocab_size
+
+        action_token_start = pg_vocab_size - fast_skip_tokens - action_vocab_size
+        action_token_end = pg_vocab_size - fast_skip_tokens
+
+        # 过滤有效的 action tokens
+        valid_mask = (tokens >= action_token_start) & (tokens < action_token_end)
+        valid_tokens = tokens[valid_mask]
+
+        # 检查无效tokens并记录警告
+        invalid_tokens = tokens[~valid_mask]
+        if len(invalid_tokens) > 0:
+            print(
+                f"Warning: Found {len(invalid_tokens)} invalid tokens outside range [{action_token_start}, {action_token_end})"
+            )
+            print(f"Invalid tokens: {invalid_tokens[:10]}...")  # 只显示前10个
+
+        if len(valid_tokens) == 0:
+            # 如果没有有效 token，返回零动作
+            print(f"Warning: No valid action tokens found. Returning zero actions.")
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+        # 使用 FASTTokenizer 的 _fast_tokenizer.decode 方法解码 token 为连续动作
+        try:
+            # 🔥 关键修复: 必须将 global PaliGemma tokens 转换为 local indices
+            # FAST tokenizer 的 decode 方法期望 local indices，不是 global tokens
+            local_indices = valid_tokens - action_token_start
+
+            decoded_actions = self.tokenizer._fast_tokenizer.decode(
+                [local_indices.tolist()], time_horizon=action_horizon, action_dim=action_dim
+            )
+            result = np.array(decoded_actions[0], dtype=np.float32)
+
+            # 检查输出形状是否正确
+            expected_shape = (action_horizon, action_dim)
+            if result.shape != expected_shape:
+                print(
+                    f"Error decoding tokens: Decoded DCT coefficients have shape {result.shape}, expected {expected_shape}"
+                )
+                print(f"Tokens: {valid_tokens[:10].tolist()}")
+                print(f"Local indices: {local_indices[:10].tolist()}")
+                print(f"Number of valid tokens: {len(valid_tokens)}")
+                return np.zeros(expected_shape, dtype=np.float32)
+
+            return result
+        except Exception as e:
+            # 如果解码失败，返回零动作并记录错误
+            print(f"Error decoding tokens: {e}")
+            print(f"Tokens: {valid_tokens[:10].tolist()}")
+            print(f"Local indices attempted: {(valid_tokens - action_token_start)[:10].tolist()}")
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+
 def flatten_dict(tree: at.PyTree) -> dict:
     """Flatten a nested dictionary. Uses '/' as the separator."""
     return traverse_util.flatten_dict(tree, sep="/")
