@@ -64,9 +64,9 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
     action_horizon: int = 10
     # NOTE: max_token_len is now for the prefix (observation) only.
     # Action tokens will have their own sequence length derived from action_horizon.
-    max_action_token_len: int = 64
+    max_action_token_len: int = 48
     max_text_token_len: int = 64
-    max_token_len: int = 128
+    max_token_len: int = 120
 
     # Tokenizer for the fast model.
     fast_model_tokenizer: Any | None = None
@@ -220,7 +220,10 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
     @at.typecheck
     def embed_suffix(
-        self, obs: _model.Observation, noisy_action_tokens: at.Int[at.Array, "b s_a"], time: at.Float[at.Array, " b"]
+        self,
+        noisy_action_tokens: at.Int[at.Array, "b s_a"],
+        time: at.Float[at.Array, " b"],
+        action_mask: at.Bool[at.Array, "b s_a"],
     ) -> tuple[at.Float[at.Array, "b s_a emb"], at.Bool[at.Array, "b s_a"]]:
         """
         Embeds the masked action tokens and the timestep for the Action Expert.
@@ -236,10 +239,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 3. Fuse embeddings by adding time embedding to each action token embedding.
         suffix_tokens_embedded = action_embeds + time_embeds[:, None, :]
 
-        # 4. Create the mask for the suffix part (all True).
-        suffix_mask = obs.dfm_action_mask
-
-        return suffix_tokens_embedded, suffix_mask
+        return suffix_tokens_embedded, action_mask
 
     @override
     def compute_loss(
@@ -286,7 +286,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 3. Embed prefix and suffix.
         prefix_tokens_embedded, prefix_mask = self.embed_prefix(observation)
         # Note: The time passed to the model represents "corruption", so we use (1-t).
-        suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time)
+        suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time, observation.dfm_action_mask)
 
         # 4. Prepare for the dual-expert model pass.
         # Prefix part has bidirectional attention among its tokens.
@@ -378,7 +378,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
             time_for_model = jnp.full((batch_size,), mask_ratio)
 
             # b. Embed current (partially masked) tokens and time.
-            suffix_tokens_embedded, suffix_mask = self.embed_suffix(action_tokens, time_for_model)
+            suffix_tokens_embedded, suffix_mask = self.embed_suffix(action_tokens, time_for_model, mask_to_be_predicted)
             projected_suffix_embedded = self.suffix_in_proj(suffix_tokens_embedded)
 
             # c. Create attention mask for the Action Expert.
