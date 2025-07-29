@@ -177,7 +177,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 1. consider inject time in every layer?
         # 2. consider double the feature dim
         self.time_embed_mlp = nnx.Sequential(
-            nnx.Linear(action_expert_config.width * 2, action_expert_config.width, rngs=rngs),
+            nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs),
             nnx.gelu,
             nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs),
         )
@@ -231,7 +231,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         action_embeds = self.PaliGemma.llm(noisy_action_tokens, method="embed")
 
         time_embeds_sincos = posemb_sincos(time, self.action_expert_width)
-        time_embeds = self.time_embed_mlp([action_embeds, time_embeds_sincos], axis=-1)
+        time_embeds = self.time_embed_mlp(time_embeds_sincos)
 
         # 3. Fuse embeddings by adding time embedding to each action token embedding.
         suffix_tokens_embedded = action_embeds + time_embeds[:, None, :]
