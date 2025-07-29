@@ -237,7 +237,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         suffix_tokens_embedded = action_embeds + time_embeds[:, None, :]
 
         # 4. Create the mask for the suffix part (all True).
-        suffix_mask = jnp.ones(suffix_tokens_embedded.shape[:2], dtype=jnp.bool_)
+        suffix_mask = obs.dfm_action_mask
 
         return suffix_tokens_embedded, suffix_mask
 
