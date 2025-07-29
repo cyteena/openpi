@@ -10,6 +10,9 @@ from transformers import AutoProcessor
 import openpi.models.utils.fsq_tokenizer as fsq_tokenizer
 import openpi.shared.download as download
 
+logger = logging.getLogger("openpi")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s")
+
 
 class PaligemmaTokenizer:
     def __init__(self, max_len: int = 48):
@@ -59,18 +62,22 @@ class FASTTokenizer:
         cleaned_text = prompt.lower().strip().replace("_", " ")
 
         # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
+
         discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
 
         # Convention: prefix includes prompt and string-representation of state, followed by ';'
         state_str = " ".join(map(str, discretized_state))
         prefix = f"Task: {cleaned_text}, State: {state_str};\n"
+        print(f"Prefix: {prefix}")
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
             # Tokenize actions with FAST tokenizer --> map to last tokens in PaliGemma vocab
+            logger.debug(f"We are Tokenizing actions: {actions.shape}")
             action_tokens = self._fast_tokenizer(actions[None])[0]
+            logger.debug(f"{action_tokens=}")
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
-
+            logger.debug(f"{action_tokens_in_pg=}")
             # Convention: postfix contains 'Action:' followed by FAST tokens, followed by '|'
             postfix_tokens = (
                 self._paligemma_tokenizer.encode("Action: ")
@@ -106,7 +113,38 @@ class FASTTokenizer:
             ar_mask = ar_mask[: self._max_len]
             loss_mask = loss_mask[: self._max_len]
 
+        logger.debug(f"Tokenized tokens: {tokens}")
+
         return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
+
+    def action_tokenize(self, actions: np.ndarray, max_action_token_len=128) -> np.ndarray:
+        """
+        Tokenize actions using the FAST tokenizer and map to PaliGemma tokens.
+        """
+        # Tokenize actions with FAST tokenizer --> map to last tokens in PaliGemma vocab
+        action_tokens = self._fast_tokenizer(actions[None])[0]
+        action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
+        # Convention: postfix contains 'Action:' followed by FAST tokens, followed by '|'
+        postfix_tokens = (
+            self._paligemma_tokenizer.encode("Action: ")
+            + action_tokens_in_pg.tolist()
+            + self._paligemma_tokenizer.encode("|", add_eos=True)
+        )
+        postfix_tokens_mask = [True] * len(postfix_tokens)
+        if len(postfix_tokens) < max_action_token_len:
+            padding = [False] * (max_action_token_len - len(postfix_tokens))
+            postfix_tokens += padding
+            postfix_tokens_mask += padding
+        else:
+            if len(postfix_tokens) > max_action_token_len:
+                logging.warning(
+                    f"Action token length ({len(postfix_tokens)}) exceeds max length ({max_action_token_len}), "
+                    "truncating. Consider increasing the `max_action_token_len` in your model config if this happens frequently."
+                )
+            postfix_tokens = postfix_tokens[:max_action_token_len]
+            postfix_tokens_mask = postfix_tokens_mask[:max_action_token_len]
+
+        return np.asarray(postfix_tokens), np.asarray(postfix_tokens_mask)
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens

@@ -182,6 +182,8 @@ class Pi0FAST(_model.BaseModel):
         assert obs.tokenized_prompt is not None, "Tokenized prompt is required"
         assert obs.tokenized_prompt_mask is not None, "Tokenized prompt mask is required"
         assert obs.token_ar_mask is not None, "Token auto-regressive mask is required"
+
+        # tokenized_prompt : task prompt + state + action
         tokenized_inputs_embeddings = self.PaliGemma.llm(obs.tokenized_prompt, embed_only=True)
         token_embeddings.append(tokenized_inputs_embeddings)
         input_mask.append(obs.tokenized_prompt_mask)

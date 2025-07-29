@@ -132,7 +132,9 @@ class ModelTransformFactory(GroupFactory):
                 )
                 return _transforms.Group(
                     inputs=[
-                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.InjectDefaultPrompt(
+                            self.default_prompt
+                        ),  # use class as the function? (beneficial?)
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizeFASTInputs(
                             tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
@@ -148,22 +150,30 @@ class ModelTransformFactory(GroupFactory):
                 )
 
             case _model.ModelType.PI0_DFM:
+                tokenizer_cls = (
+                    _tokenizer.FASTTokenizer
+                    if model_config.fast_model_tokenizer is None
+                    else model_config.fast_model_tokenizer
+                )
                 # PI0_DFM uses action tokenization in data preprocessing to avoid redundant computation
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         _transforms.ResizeImages(224, 224),
-                        _transforms.TokenizePrompt(_tokenizer.PaligemmaTokenizer(model_config.max_token_len)),
-                        # Add action tokenization in preprocessing for DFM
-                        _transforms.TokenizeDFMActions(),
+                        _transforms.TokenizeDFMLangState(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_text_token_len)
+                        ),
+                        _transforms.TokenizeDFMActionInput(
+                            _tokenizer.FASTTokenizer(model_config.max_action_token_len),
+                            max_action_token_len=model_config.max_action_token_len,
+                        ),
                     ],
                     outputs=[
-                        # 将动作 token 解码为连续动作
-                        _transforms.DecodeDFMActions(
-                            _tokenizer.FASTTokenizer(model_config.max_token_len),
+                        _transforms.ExtractFASTActions(
+                            tokenizer_cls(model_config.max_token_len),
                             action_horizon=model_config.action_horizon,
                             action_dim=model_config.action_dim,
-                        ),
+                        )
                     ],
                 )
 
@@ -291,6 +301,7 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
     comments below.
     """
 
+    # right way to use data_config = train_config.data.create(assets_dirs, train_config.model)
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # The repack transform is *only* applied to the data coming from the dataset,
@@ -659,7 +670,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi0_dfm_fast_libero",
-        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_token_len=180),
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),

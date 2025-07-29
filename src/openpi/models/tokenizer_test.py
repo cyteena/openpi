@@ -25,3 +25,14 @@ def test_fast_tokenizer():
 
     act = tokenizer.extract_actions(tokens, 3, 2)
     assert act.shape == (3, 2)
+
+
+def test_fast_tokenizer_decode():
+    prompt = "Hello, world!"
+    state = np.random.rand(5).astype(np.float32)
+    action = np.random.rand(3, 234).astype(np.float32)
+    tokenizer = _tokenizer.FASTTokenizer(max_len=256)
+    tokens, _, _, _ = tokenizer.tokenize(prompt, state, action)
+
+    act = tokenizer.extract_actions(tokens, 3, 234)
+    assert act.shape == (3, 234)  # Should match the original action shape

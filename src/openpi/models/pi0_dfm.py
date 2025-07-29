@@ -3,6 +3,8 @@
 import dataclasses
 import logging
 
+from typing import Any
+
 import einops
 import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
@@ -20,6 +22,7 @@ import openpi.shared.nnx_utils
 
 
 logger = logging.getLogger("openpi")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s")
 
 
 def make_attn_mask(input_mask, mask_ar):
@@ -57,12 +60,18 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
     action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # We remove action_expert_variant, as the new discrete head replaces its functionality.
-    action_dim: int = 32
-    action_horizon: int = 50
+    action_dim: int = 7
+    action_horizon: int = 10
     # NOTE: max_token_len is now for the prefix (observation) only.
     # Action tokens will have their own sequence length derived from action_horizon.
-    max_token_len: int = 320
-    max_action_token_len: int = 160
+    max_action_token_len: int = 64
+    max_text_token_len: int = 64
+    max_token_len: int = 128
+
+    # Tokenizer for the fast model.
+    fast_model_tokenizer: Any | None = None
+    # Keyword arguments for the fast model tokenizer.
+    fast_model_tokenizer_kwargs: dict[str, Any] | None = None
 
     # dirty way to get the value
     from .tokenizer import FASTTokenizer
@@ -143,6 +152,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         self.pg_skip_tokens = config.pg_skip_tokens
         self.action_vocab_size = config.action_vocab_size
         self.mask_token_id = config.mask_token_id
+        self.action_expert_width = action_expert_config.width
         # --- VLM Setup (Simplified) ---
         # We only instantiate one LLM for visual/language conditioning.
         llm = nnx_bridge.ToNNX(
@@ -169,26 +179,15 @@ class Pi0DiscreteFlow(_model.BaseModel):
         self.time_embed_mlp = nnx.Sequential(
             nnx.Linear(action_expert_config.width * 2, action_expert_config.width, rngs=rngs),
             nnx.gelu,
-            nnx.Linear(action_expert_config.width, paligemma_config.width, rngs=rngs),
+            nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs),
         )
         if paligemma_config.width != action_expert_config.width:
             self.suffix_in_proj = nnx.Linear(paligemma_config.width, action_expert_config.width, rngs=rngs)
         else:
             self.suffix_in_proj = lambda x: x  # Identity function
         # New output projection layer for predicting token logits
+        # TODO: use paligemma embedding weight to be here
         self.head_out_proj = nnx.Linear(action_expert_config.width, self.action_vocab_size, rngs=rngs)
-
-    # In pi0_dfm.py, inside the Pi0DiscreteFlow class
-
-    # ... (previous code from __init__ remains the same) ...
-    # We remove self.action_token_embed as it's no longer needed.
-    # self.PaliGemma.llm already contains the embedding layer.
-
-    # +++ NEW: Helper functions for token ID mapping and action conversion +++
-
-    # +++ NEW: A helper function to wrap the non-JAX tokenizer.decode in a pure_callback +++
-    # +++ DEPRECATED: The following methods are no longer used after moving tokenization to preprocessing +++
-    # They are kept for compatibility but should be removed in the future
 
     def _decode_actions_callback(self, local_indices: np.ndarray) -> np.ndarray:
         """
@@ -203,21 +202,12 @@ class Pi0DiscreteFlow(_model.BaseModel):
         return np.array(decoded_actions, dtype=np.float32)
 
     @at.typecheck
-    def _local_action_indices_to_pg_tokens(
-        self, indices: at.Int[at.Array | np.ndarray, "..."]
-    ) -> at.Int[at.Array, "..."]:
-        """Maps local action indices [0, action_vocab_size-1] to global PaliGemma token IDs."""
-        # This logic is correct.
-        result = self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size + indices
-        return jnp.asarray(result, dtype=jnp.int32)
-
-    @at.typecheck
     def _pg_tokens_to_local_action_indices(
         self, pg_tokens: at.Int[at.Array | np.ndarray, "..."]
     ) -> at.Int[at.Array, "..."]:
         """Maps global PaliGemma action token IDs back to local action indices [0, action_vocab_size-1]."""
         # This logic is correct.
-        result = pg_tokens - (self.pg_vocab_size - self.pg_skip_tokens - self.action_vocab_size)
+        result = self.pg_vocab_size - self.pg_skip_tokens - pg_tokens - 1
         return jnp.asarray(result, dtype=jnp.int32)
 
     def _encode_actions_callback(self, actions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -269,24 +259,6 @@ class Pi0DiscreteFlow(_model.BaseModel):
         return jax.vmap(lambda x: jax.pure_callback(self._encode_actions_callback, result_shape_dtype, x))(actions)
 
     @at.typecheck
-    def _tokens_to_actions(self, action_tokens: at.Int[at.Array, "b s_a"]) -> _model.Actions:
-        """
-        Decodes a sequence of global PaliGemma token IDs back to continuous actions.
-        This version uses jax.pure_callback to safely handle the non-JIT compatible decode function.
-        """
-        local_indices = self._pg_tokens_to_local_action_indices(action_tokens)
-
-        # Define the output shape and dtype for the callback result.
-        # This is crucial for JAX to be able to JIT compile the code that calls this.
-        result_shape_dtype = jax.ShapeDtypeStruct(
-            shape=(action_tokens.shape[0], self.config.action_horizon, self.config.action_dim),
-            dtype=jnp.float32,
-        )
-
-        # Wrap the Python function call in pure_callback.
-        return jax.pure_callback(self._decode_actions_callback, result_shape_dtype, local_indices)
-
-    @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
     ) -> tuple[at.Float[at.Array, "b s_p emb"], at.Bool[at.Array, "b s_p"]]:
@@ -306,13 +278,18 @@ class Pi0DiscreteFlow(_model.BaseModel):
             tokens_list.append(tokenized_inputs)
             input_mask_list.append(obs.tokenized_prompt_mask)
 
+        elif obs.dfm_prefix_token is not None:
+            dfm_prefix_inputs = self.PaliGemma.llm(obs.dfm_prefix_token, method="embed")
+            tokens_list.append(dfm_prefix_inputs)
+            input_mask_list.append(obs.dfm_prefix_mask)
+
         tokens = jnp.concatenate(tokens_list, axis=1)
         input_mask = jnp.concatenate(input_mask_list, axis=1)
         return tokens, input_mask
 
     @at.typecheck
     def embed_suffix(
-        self, noisy_action_tokens: at.Int[at.Array, "b s_a"], time: at.Float[at.Array, " b"]
+        self, obs: _model.Observation, noisy_action_tokens: at.Int[at.Array, "b s_a"], time: at.Float[at.Array, " b"]
     ) -> tuple[at.Float[at.Array, "b s_a emb"], at.Bool[at.Array, "b s_a"]]:
         """
         Embeds the masked action tokens and the timestep for the Action Expert.
@@ -322,10 +299,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # This correctly handles regular tokens and the [MASK] token.
         action_embeds = self.PaliGemma.llm(noisy_action_tokens, method="embed")
 
-        # 2. Embed timestep using sine-cosine positional encoding + MLP.
-        action_expert_width = action_embeds.shape[-1]
-        time_embeds_sincos = posemb_sincos(time, action_expert_width)
-        time_embeds = self.time_embed_mlp(time_embeds_sincos)
+        time_embeds_sincos = posemb_sincos(time, self.action_expert_width)
+        time_embeds = self.time_embed_mlp([action_embeds, time_embeds_sincos], axis=-1)
 
         # 3. Fuse embeddings by adding time embedding to each action token embedding.
         suffix_tokens_embedded = action_embeds + time_embeds[:, None, :]
@@ -350,6 +325,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         preprocess_rng, time_rng, mask_rng = jax.random.split(rng, 3)
 
         # 1. Preprocess observations and use pre-tokenized actions.
+        # process image
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
         # x_1 are the ground truth tokens from data preprocessing (passed as actions), with global PaliGemma IDs.
         x_1 = actions  # Shape: (B, S_a) - now actions are pre-tokenized
@@ -357,7 +333,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
         # For now, assume all tokens are valid (no padding mask)
         # TODO: Add proper action_token_mask support if needed
-        action_mask = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)
+        # observation.dfm_action_mask show us the valid action tokens.
+        action_mask = observation.dfm_action_mask
 
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
@@ -380,8 +357,6 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # Note: The time passed to the model represents "corruption", so we use (1-t).
         suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time)
 
-        projected_suffix_embedded = self.suffix_in_proj(suffix_tokens_embedded)
-
         # 4. Prepare for the dual-expert model pass.
         # Prefix part has bidirectional attention among its tokens.
         prefix_ar_mask = jnp.zeros(prefix_tokens_embedded.shape[1], dtype=jnp.bool_)
@@ -401,7 +376,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 5. Forward pass through the dual-expert LLM.
         # _gemma.Module will route the first list element to LLM 0 and the second to LLM 1.
         (_, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens_embedded, projected_suffix_embedded], mask=attn_mask, positions=positions
+            [prefix_tokens_embedded, suffix_tokens_embedded], mask=attn_mask, positions=positions
         )
 
         # 6. Compute loss on the masked tokens.
@@ -418,7 +393,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         masked_loss = (token_loss * tokens_to_mask) * action_mask
 
         # Normalize the loss by the number of masked tokens per sequence.
-        num_masked_tokens = jnp.sum(tokens_to_mask, axis=-1)
+        num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
         # Avoid division by zero if a sequence has no masked tokens (e.g., if t=1).
         sequence_loss = jnp.sum(masked_loss, axis=-1) / jnp.maximum(1.0, num_masked_tokens)
 
@@ -535,5 +510,4 @@ class Pi0DiscreteFlow(_model.BaseModel):
             0, num_steps, loop_body, (action_tokens, mask_to_be_predicted, decode_rng)
         )
 
-        # 4. 现在直接返回 token 序列，解码过程交由 output transform 处理
         return final_tokens
