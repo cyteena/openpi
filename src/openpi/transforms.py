@@ -299,7 +299,7 @@ class TokenizeDFMLangState(DataTransformFn):
 
         cleaned_text = prompt.lower().strip().replace("_", " ")
         state_str = " ".join(map(str, discretized_state))
-        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
+        prefix = f"Task: {cleaned_text}, State: {state_str};\nAction: " # we move the action: here
 
         prefix_tokens, prefix_mask = self.tokenizer.tokenize(prefix)
 

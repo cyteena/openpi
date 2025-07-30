@@ -678,9 +678,17 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
         num_train_steps=30_000,
     ),
+    #    # We remove action_expert_variant, as the new discrete head replaces its functionality.
+    # action_dim: int = 7
+    # action_horizon: int = 10
+    # # NOTE: max_token_len is now for the prefix (observation) only.
+    # # Action tokens will have their own sequence length derived from action_horizon.
+    # max_action_token_len: int = 48
+    # max_text_token_len: int = 64
+    # max_token_len: int = 120
     TrainConfig(
         name="pi0_dfm_libero",
-        model=pi0_dfm.Pi0DiscreteFlowConfig(),
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=48, max_text_token_len=64, max_token_len=120),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),

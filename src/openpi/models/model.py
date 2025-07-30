@@ -209,8 +209,17 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        dfm_prefix_token=observation.dfm_prefix_token,
+        dfm_prefix_mask=observation.dfm_prefix_mask,
+        dfm_action_token=observation.dfm_action_token,
+        dfm_action_mask=observation.dfm_action_mask
     )
 
+    # # Tokens used for discrete fm
+    # dfm_prefix_token: at.Int[ArrayT, "*b tl"] | None = None
+    # dfm_prefix_mask: at.Bool[ArrayT, "*b tl"] | None = None
+    # dfm_action_token: at.Int[ArrayT, "*b al"] | None = None
+    # dfm_action_mask: at.Bool[ArrayT, "*b al"] | None = None
 
 @dataclasses.dataclass(frozen=True)
 class BaseModelConfig(abc.ABC):

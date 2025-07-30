@@ -144,7 +144,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # --- PaliGemma Setup ---
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
-
+        
         # Now we read the constants from the config, may we find a way to do more cleaner.
         self.config = config
         self.tokenizer = config.tokenizer
@@ -153,15 +153,17 @@ class Pi0DiscreteFlow(_model.BaseModel):
         self.action_vocab_size = config.action_vocab_size
         self.mask_token_id = config.mask_token_id
         self.action_expert_width = action_expert_config.width
+        self.paligemma_width = paligemma_config.width
         # --- VLM Setup (Simplified) ---
-        # We only instantiate one LLM for visual/language conditioning.
-        llm = nnx_bridge.ToNNX(
-            _gemma.Module(
-                configs=[paligemma_config, action_expert_config],  # Use both configs
-                embed_dtype=config.dtype,
-            )
+        # --- 1. 创建所有模块的蓝图 ---
+        llm_module = _gemma.Module(
+            configs=[paligemma_config, action_expert_config],
+            embed_dtype=config.dtype,
+            dropout=0.0,
         )
+        llm = nnx_bridge.ToNNX(llm_module)
         llm.lazy_init(rngs=rngs, method="init")
+        
         img = nnx_bridge.ToNNX(
             _siglip.Module(
                 num_classes=paligemma_config.width,
@@ -171,23 +173,28 @@ class Pi0DiscreteFlow(_model.BaseModel):
                 dtype_mm=config.dtype,
             )
         )
+        img = nnx_bridge.ToNNX(img)
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
-
-        # 1. consider inject time in every layer?
-        # 2. consider double the feature dim
-        self.time_embed_mlp = nnx.Sequential(
-            nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs),
-            nnx.gelu,
-            nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs),
-        )
-        if paligemma_config.width != action_expert_config.width:
-            self.suffix_in_proj = nnx.Linear(paligemma_config.width, action_expert_config.width, rngs=rngs)
-        else:
-            self.suffix_in_proj = lambda x: x  # Identity function
-        # New output projection layer for predicting token logits
-        # TODO: use paligemma embedding weight to be here
+      
+        self.suffix_in_proj = nnx.Linear(paligemma_config.width, action_expert_config.width, rngs=rngs)
+        
+        self.time_embed_mlp_in = nnx.Linear(paligemma_config.width, action_expert_config.width, rngs=rngs)
+        self.time_embed_mlp_out = nnx.Linear(action_expert_config.width, paligemma_config.width, rngs=rngs)
         self.head_out_proj = nnx.Linear(action_expert_config.width, self.action_vocab_size, rngs=rngs)
+        
+    @at.typecheck
+    def _local_action_indices_to_pg_tokens(self, indices: at.Int[at.Array | np.ndarray, "..."]) -> at.Int[at.Array, "..."]:
+        """Maps local action indices [0, action_vocab_size-1] to global PaliGemma token IDs."""
+        # This logic is correct.
+        return self.pg_vocab_size - self.pg_skip_tokens - indices - 1
+        
+    @at.typecheck
+    def _pg_tokens_to_local_action_indices(self, pg_tokens: at.Int[at.Array | np.ndarray, "..."]) -> at.Int[at.Array, "..."]:
+        """Maps global PaliGemma action token IDs back to local action indices [0, action_vocab_size-1]."""
+        # This logic is correct.
+        return self.pg_vocab_size - self.pg_skip_tokens - pg_tokens - 1
 
     @at.typecheck
     def embed_prefix(
@@ -231,13 +238,11 @@ class Pi0DiscreteFlow(_model.BaseModel):
         """
         # 1. Embed action tokens using the main LLM's embedding table.
         # This correctly handles regular tokens and the [MASK] token.
-        action_embeds = self.PaliGemma.llm(noisy_action_tokens, method="embed")
-
-        time_embeds_sincos = posemb_sincos(time, self.action_expert_width)
-        time_embeds = self.time_embed_mlp(time_embeds_sincos)
-
-        # 3. Fuse embeddings by adding time embedding to each action token embedding.
-        suffix_tokens_embedded = action_embeds + time_embeds[:, None, :]
+        action_embeds = self.PaliGemma.llm(noisy_action_tokens, method="embed") # paligemma
+        action_time_embeds = action_embeds + posemb_sincos(time, self.paligemma_width)[:,None,:]
+        suffix_tokens_embedded = self.time_embed_mlp_in(action_time_embeds)
+        suffix_tokens_embedded = nnx.swish(suffix_tokens_embedded)
+        suffix_tokens_embedded = self.time_embed_mlp_out(suffix_tokens_embedded)
 
         return suffix_tokens_embedded, action_mask
 
@@ -254,6 +259,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         Computes the Discrete Flow Matching loss.
         """
         preprocess_rng, time_rng, mask_rng = jax.random.split(rng, 3)
+        action_mask = observation.dfm_action_mask
 
         # 1. Preprocess observations and use pre-tokenized actions.
         # process image
@@ -265,7 +271,6 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # For now, assume all tokens are valid (no padding mask)
         # TODO: Add proper action_token_mask support if needed
         # observation.dfm_action_mask show us the valid action tokens.
-        action_mask = observation.dfm_action_mask
 
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
@@ -286,7 +291,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 3. Embed prefix and suffix.
         prefix_tokens_embedded, prefix_mask = self.embed_prefix(observation)
         # Note: The time passed to the model represents "corruption", so we use (1-t).
-        suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time, observation.dfm_action_mask)
+        suffix_tokens_embedded, suffix_mask = self.embed_suffix(x_t, 1.0 - time, action_mask)
+        suffix_tokens_embedded = self.suffix_in_proj(suffix_tokens_embedded)
 
         # 4. Prepare for the dual-expert model pass.
         # Prefix part has bidirectional attention among its tokens.
@@ -316,9 +322,10 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
         # Convert ground truth global PG tokens to local action indices for loss calculation.
         local_targets = self._pg_tokens_to_local_action_indices(x_1)
+        safe_local_targets = jnp.where(action_mask, local_targets, 0)
 
         # Calculate cross-entropy loss.
-        token_loss = optax.softmax_cross_entropy_with_integer_labels(logits, local_targets)
+        token_loss = optax.softmax_cross_entropy_with_integer_labels(logits, safe_local_targets)
 
         # Only consider the loss for the tokens that were actually masked.
         masked_loss = (token_loss * tokens_to_mask) * action_mask

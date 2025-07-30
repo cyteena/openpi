@@ -126,15 +126,14 @@ class FASTTokenizer:
         action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
         # Convention: postfix contains 'Action:' followed by FAST tokens, followed by '|'
         postfix_tokens = (
-            self._paligemma_tokenizer.encode("Action: ")
-            + action_tokens_in_pg.tolist()
+            action_tokens_in_pg.tolist()
             + self._paligemma_tokenizer.encode("|", add_eos=True)
         )
-        postfix_tokens_mask = [True] * len(postfix_tokens)
+        postfix_tokens_mask = [True] * (len(postfix_tokens) - 2)
         if len(postfix_tokens) < max_action_token_len:
             padding = [False] * (max_action_token_len - len(postfix_tokens))
             postfix_tokens += padding
-            postfix_tokens_mask += padding
+            postfix_tokens_mask += padding + [False] * 2
         else:
             if len(postfix_tokens) > max_action_token_len:
                 logging.warning(

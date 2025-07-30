@@ -3,7 +3,10 @@ import logging
 import re
 from typing import Protocol, runtime_checkable
 
+
+import flax.nnx as nnx # <-- Import nnx
 import flax.traverse_util
+
 import numpy as np
 
 import openpi.models.model as _model
@@ -12,14 +15,32 @@ import openpi.shared.download as download
 
 logger = logging.getLogger(__name__)
 
-# In openpi/training/weight_loaders.py
+# This is the key function to fix the problem.
+def safe_flatten_dict(dct, sep="/"):
+    """
+    A variant of flax.traverse_util.flatten_dict that is robust to
+    non-string keys and handles flax.nnx.Variable types as leaves.
+    """
+    def _flatten(xs, prefix):
+        # A leaf is anything that is NOT a dictionary or is an empty dictionary.
+        # CRUCIALLY, we also treat nnx.Variable as a leaf, to prevent recursing into it.
+        if not isinstance(xs, dict) or not xs or isinstance(xs, nnx.Variable):
+            # The key is to convert all path elements to string before joining.
+            return {sep.join(map(str, prefix)): xs} if prefix else {}
+        
+        result = {}
+        for key, value in xs.items():
+            # Recursively build the path.
+            path = prefix + (key,)
+            result.update(_flatten(value, path))
+        return result
 
+    # The original implementation handles non-dict inputs, let's replicate that.
+    if not isinstance(dct, dict):
+         # This case should ideally not happen for model parameters, but for safety:
+         return {None: dct}
 
-def _sanitize_params_dict(d):
-    """Recursively converts all integer keys in a nested dict to strings."""
-    if not isinstance(d, dict):
-        return d
-    return {str(k): _sanitize_params_dict(v) for k, v in d.items()}
+    return _flatten(dct, ())
 
 
 @runtime_checkable
@@ -81,32 +102,42 @@ class PaliGemmaWeightLoader(WeightLoader):
         # Add all missing weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
 
+# In src/openpi/training/weight_loaders.py
 
 def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex: str) -> at.Params:
-    """Merges the loaded parameters with the reference parameters.
+    """Merges the loaded parameters with the reference parameters."""
+    # `params` is a PyTree whose leaves are ShapeDtypeStruct objects.
+    # `loaded_params` is a PyTree of real numpy arrays.
+    
+    flat_ref = safe_flatten_dict(params, sep="/")
+    flat_loaded = safe_flatten_dict(loaded_params, sep="/")
 
-    Args:
-        loaded_params: The parameters to merge.
-        params: The reference parameters.
-        missing_regex: A regex pattern for all missing keys that should be merged from the reference parameters.
-
-    Returns:
-        A new dictionary with the merged parameters.
-    """
-    sanitized_params = _sanitize_params_dict(params)
-    flat_ref = flax.traverse_util.flatten_dict(sanitized_params, sep="/")
-    flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
-
-    # First, take all weights that are a subset of the reference weights.
     result = {}
+    
+    # Process loaded parameters
     for k, v in flat_loaded.items():
-        if k in flat_ref:
-            result[k] = v.astype(flat_ref[k].dtype)
+        if k is None or k not in flat_ref:
+            continue
+        
+        # --- START OF FIX ---
+        # The leaf from the reference shape is the ShapeDtypeStruct itself.
+        ref_leaf_shape = flat_ref[k]
+        
+        # Ensure we have a dtype to cast to.
+        # ShapeDtypeStruct directly has a .dtype attribute.
+        if hasattr(ref_leaf_shape, 'dtype'):
+            result[k] = v.astype(ref_leaf_shape.dtype)
+        # --- END OF FIX ---
 
-    # Then, merge any missing weights as defined by the missing regex.
+    # Process missing parameters from the reference shape dict
     pattern = re.compile(missing_regex)
-    for k in {k for k in flat_ref if pattern.fullmatch(k)}:
-        if k not in result:
-            result[k] = flat_ref[k]
+    for k, v in flat_ref.items():
+        if k is None:
+            continue
+        
+        # If the key is not in our loaded result, and it matches the regex,
+        # we add the original reference leaf (which is the ShapeDtypeStruct).
+        if k not in result and pattern.fullmatch(k):
+            result[k] = v # v is the original ShapeDtypeStruct
 
     return flax.traverse_util.unflatten_dict(result, sep="/")

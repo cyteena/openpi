@@ -1,0 +1,30 @@
+// .vscode/launch.json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug with UV: Attach to Train",
+            "type": "python",
+            "request": "attach",
+            "connect": { // 使用 connect 对象更清晰
+                "host": "localhost", // 'localhost' 会被 Remote-SSH 扩展正确解析为远程主机
+                "port": 7865
+            },
+            "preLaunchTask": "Run Training with UV",
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "${workspaceFolder}"
+                }
+            ]
+        },
+        // 你可以保留之前的其他配置
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
