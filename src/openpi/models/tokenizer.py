@@ -68,7 +68,6 @@ class FASTTokenizer:
         # Convention: prefix includes prompt and string-representation of state, followed by ';'
         state_str = " ".join(map(str, discretized_state))
         prefix = f"Task: {cleaned_text}, State: {state_str};\n"
-        print(f"Prefix: {prefix}")
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
