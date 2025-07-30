@@ -269,7 +269,6 @@ class TokenizeFASTInputs(DataTransformFn):
 
         state, actions = data["state"], data.get("actions")
         tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions)
-        print(f"Tokenized prompt(task + state + actions): {tokens}, token mask: {token_mask}, ar mask: {ar_mask}")
         return {
             **data,
             "tokenized_prompt": tokens,
