@@ -173,7 +173,6 @@ class Pi0DiscreteFlow(_model.BaseModel):
                 dtype_mm=config.dtype,
             )
         )
-        img = nnx_bridge.ToNNX(img)
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
