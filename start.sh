@@ -6,7 +6,6 @@ export MUJOCO_GL=egl
 export WANDB_MODE=offline
 export JAX_DEBUG_NANS=True
 export JAX_TRACEBACK_FILTERING=off
-export JAX_CHECK_TRACER_LEAKS=True
 
 export PATH=~/.local/bin:$PATH
 
