@@ -258,6 +258,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         Computes the Discrete Flow Matching loss.
         """
         preprocess_rng, time_rng, mask_rng = jax.random.split(rng, 3)
+        # only consider the valid action token
         action_mask = observation.dfm_action_mask
 
         # 1. Preprocess observations and use pre-tokenized actions.
@@ -273,12 +274,14 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
+        # TODO: beta_sampling
         time = jax.random.uniform(time_rng, (batch_size,))
 
         # Generate random noise for masking decision.
         rand_unif = jax.random.uniform(mask_rng, (batch_size, seq_len))
 
         # If random number < t, we keep the token. Otherwise, we mask it.
+        # So t = 1 is the clean data, t = 0 is the noisy distribution, same as the flow matching
         tokens_to_keep = rand_unif < time[:, None]
         tokens_to_mask = ~tokens_to_keep
 
@@ -313,7 +316,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # _gemma.Module will route the first list element to LLM 0 and the second to LLM 1.
         (_, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens_embedded, suffix_tokens_embedded], mask=attn_mask, positions=positions
-        )
+        ) # suffix_out.shape: bs, action_seq, 2048 (action_vocab_size)
 
         # 6. Compute loss on the masked tokens.
         # Project output features to logits over the action vocabulary.
@@ -359,7 +362,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
 
         # This call uses only the Prefix Expert (LLM 0) and populates the KV cache.
-        (_, kv_cache), _ = self.PaliGemma.llm(
+        # be same as the pi0
+        _, kv_cache= self.PaliGemma.llm(
             [prefix_tokens_embedded, None], mask=prefix_attn_mask, positions=positions
         )
 
@@ -377,14 +381,15 @@ class Pi0DiscreteFlow(_model.BaseModel):
             action_tokens, mask_to_be_predicted, rng = carry
 
             # a. Calculate masking schedule.
+            # it's wrong?
             completion_ratio = i / num_steps
             mask_ratio = jnp.cos(completion_ratio * jnp.pi / 2.0)
 
             # The model's time input is the "corruption level", which is the mask_ratio.
-            time_for_model = jnp.full((batch_size,), mask_ratio)
+            corrupt_for_model = jnp.full((batch_size,), mask_ratio)
 
             # b. Embed current (partially masked) tokens and time.
-            suffix_tokens_embedded, suffix_mask = self.embed_suffix(action_tokens, time_for_model, mask_to_be_predicted)
+            suffix_tokens_embedded, suffix_mask = self.embed_suffix(action_tokens, corrupt_for_model, mask_to_be_predicted)
             projected_suffix_embedded = self.suffix_in_proj(suffix_tokens_embedded)
 
             # c. Create attention mask for the Action Expert.
@@ -401,7 +406,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
             (_, suffix_out), _ = self.PaliGemma.llm(
                 [None, projected_suffix_embedded], positions=suffix_positions, kv_cache=kv_cache, mask=suffix_attn_mask
             )
-            logits = self.head_out_proj(suffix_out)  # Shape: (B, S_a, action_vocab_size)
+            logits = self.head_out_proj(suffix_out)  # Shape: (B, S_a, action_vocab_size), can be decoded by fasttoenizer
 
             # e. MaskGIT logic to update tokens.
             # Get predicted token IDs and their confidence scores.
@@ -448,3 +453,4 @@ class Pi0DiscreteFlow(_model.BaseModel):
         )
 
         return final_tokens
+    
