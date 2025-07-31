@@ -311,12 +311,15 @@ class TokenizeDFMActionInput(DataTransformFn):
     max_action_token_len: int
 
     def __call__(self, data: DataDict) -> DataDict:
-        if (action := data.pop("actions", None)) is None:
-            raise ValueError("Action is required")
-
-        action_token_pg, action_token_pg_mask = self.tokenizer.action_tokenize(
-            action, max_action_token_len=self.max_action_token_len
-        )
+        
+        actions = data.pop("actions", None)
+        
+        action_token_pg_mask, action_token_pg = None, None
+        
+        if actions is not None:
+            action_token_pg, action_token_pg_mask = self.tokenizer.action_tokenize(
+                actions, max_action_token_len=self.max_action_token_len
+            )
         return {**data, "action_token_pg": action_token_pg, "action_token_pg_mask": action_token_pg_mask}
 
 
@@ -332,6 +335,24 @@ class ExtractFASTActions(DataTransformFn):
         # Model outputs are saved in "actions", but for FAST models they represent tokens.
         tokens = data.pop("actions")
         actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+        return {
+            **data,
+            "actions": actions,
+        }
+        
+@dataclasses.dataclass(frozen=True)
+class ExtractDFM_FASTActions(DataTransformFn):
+    tokenizer: _tokenizer.FASTTokenizer
+    action_horizon: int
+    action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        # Model outputs are saved in "actions", but for FAST models they represent tokens.
+        tokens = data.pop("actions")
+        actions = self.tokenizer.extract_dfm_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+        
         return {
             **data,
             "actions": actions,
