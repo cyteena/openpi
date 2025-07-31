@@ -401,10 +401,13 @@ class Pi0DiscreteFlow(_model.BaseModel):
             suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
 
             suffix_positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+            
+            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens_embedded.shape[1])
+            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
 
             # d. Run the Action Expert part of the LLM.
             (_, suffix_out), _ = self.PaliGemma.llm(
-                [None, projected_suffix_embedded], positions=suffix_positions, kv_cache=kv_cache, mask=suffix_attn_mask
+                [None, projected_suffix_embedded], positions=suffix_positions, kv_cache=kv_cache, mask=full_attn_mask
             )
             logits = self.head_out_proj(suffix_out)  # Shape: (B, S_a, action_vocab_size), can be decoded by fasttoenizer
 
