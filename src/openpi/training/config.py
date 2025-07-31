@@ -169,7 +169,7 @@ class ModelTransformFactory(GroupFactory):
                         ),
                     ],
                     outputs=[
-                        _transforms.ExtractFASTActions(
+                        _transforms.ExtractDFM_FASTActions(
                             tokenizer_cls(model_config.max_token_len),
                             action_horizon=model_config.action_horizon,
                             action_dim=model_config.action_dim,
