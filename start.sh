@@ -7,6 +7,8 @@ export WANDB_MODE=offline
 # export JAX_DEBUG_NANS=True
 export JAX_TRACEBACK_FILTERING=off
 
+export UV_PYTHON_INSTALL_DIR=./uv_python
+
 export PATH=~/.local/bin:$PATH
 
 # conda deactivate
