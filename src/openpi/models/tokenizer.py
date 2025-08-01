@@ -116,23 +116,21 @@ class FASTTokenizer:
 
         return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
 
-    def action_tokenize(self, actions: np.ndarray, max_action_token_len=128) -> np.ndarray:
+    def action_tokenize(self, actions: np.ndarray, max_action_token_len=128, mask_token_id_pg: int  = 256717) -> np.ndarray:
         """
         Tokenize actions using the FAST tokenizer and map to PaliGemma tokens.
         """
         # Tokenize actions with FAST tokenizer --> map to last tokens in PaliGemma vocab
         action_tokens = self._fast_tokenizer(actions[None])[0]
         action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
-        # Convention: postfix contains 'Action:' followed by FAST tokens, followed by '|'
+        # we drop the | and eos, to replace them with 306(local) this special token
         postfix_tokens = (
             action_tokens_in_pg.tolist()
-            + self._paligemma_tokenizer.encode("|", add_eos=True)
         )
-        postfix_tokens_mask = [True] * (len(postfix_tokens) - 2)
+        postfix_tokens_mask = [True] * max_action_token_len
         if len(postfix_tokens) < max_action_token_len:
-            padding = [False] * (max_action_token_len - len(postfix_tokens))
+            padding = [mask_token_id_pg] * (max_action_token_len - len(postfix_tokens))
             postfix_tokens += padding
-            postfix_tokens_mask += padding + [False] * 2
         else:
             if len(postfix_tokens) > max_action_token_len:
                 logging.warning(
