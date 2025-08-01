@@ -166,6 +166,7 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.TokenizeDFMActionInput(
                             _tokenizer.FASTTokenizer(model_config.max_action_token_len),
                             max_action_token_len=model_config.max_action_token_len,
+                            mask_token_id_pg=model_config.mask_token_id
                         ),
                     ],
                     outputs=[

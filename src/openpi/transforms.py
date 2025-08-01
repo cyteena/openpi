@@ -213,6 +213,7 @@ class DeltaActions(DataTransformFn):
         state, actions = data["state"], data["actions"]
         mask = np.asarray(self.mask)
         dims = mask.shape[-1]
+        # convert to delta action
         actions[..., :dims] -= np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
         data["actions"] = actions
 
@@ -309,16 +310,17 @@ class TokenizeDFMLangState(DataTransformFn):
 class TokenizeDFMActionInput(DataTransformFn):
     tokenizer: _tokenizer.FASTTokenizer
     max_action_token_len: int
+    mask_token_id_pg: int
 
     def __call__(self, data: DataDict) -> DataDict:
         
-        actions = data.pop("actions", None)
+        actions = data.get("actions", None) # we keep the actions in data(batch)
         
         action_token_pg_mask, action_token_pg = None, None
         
         if actions is not None:
             action_token_pg, action_token_pg_mask = self.tokenizer.action_tokenize(
-                actions, max_action_token_len=self.max_action_token_len
+                actions, max_action_token_len=self.max_action_token_len, mask_token_id_pg=self.mask_token_id_pg
             )
         return {**data, "action_token_pg": action_token_pg, "action_token_pg_mask": action_token_pg_mask}
 
