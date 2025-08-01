@@ -487,8 +487,4 @@ class DataLoaderImpl(DataLoader):
 
     def __iter__(self):
         for batch in self._data_loader:
-            action = batch.pop("actions", None)
-            if action is None:
-                yield _model.Observation.from_dict(batch), batch["action_token_pg"]
-            else:
-                yield _model.Observation.from_dict(batch), action
+            yield _model.Observation.from_dict(batch), batch['actions']
