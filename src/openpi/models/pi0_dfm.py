@@ -59,7 +59,7 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
     paligemma_variant: _gemma.Variant = "gemma_2b"
     action_expert_variant: _gemma.Variant = "gemma_300m"
 
-    # We remove action_expert_variant, as the new discrete head replaces its functionality.
+    # action_dim, action_horizon, used for fast_tokenizer
     action_dim: int = 7
     action_horizon: int = 10
     # NOTE: max_token_len is now for the prefix (observation) only.
