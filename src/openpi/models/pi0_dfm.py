@@ -158,8 +158,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # --- 1. 创建所有模块的蓝图 ---
         llm_module = _gemma.Module(
             configs=[paligemma_config, action_expert_config],
-            embed_dtype=config.dtype,
-            dropout=0.0,
+            embed_dtype=config.dtype
         )
         llm = nnx_bridge.ToNNX(llm_module)
         llm.lazy_init(rngs=rngs, method="init")
@@ -275,7 +274,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
         # TODO: beta_sampling
-        time = jax.random.uniform(time_rng, (batch_size,))
+        time = jax.random.beta(time_rng, 1, 1.5, shape=(batch_size,)) * 0.999 + 0.001
 
         # Generate random noise for masking decision.
         rand_unif = jax.random.uniform(mask_rng, (batch_size, seq_len))
@@ -316,7 +315,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # _gemma.Module will route the first list element to LLM 0 and the second to LLM 1.
         (_, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens_embedded, suffix_tokens_embedded], mask=attn_mask, positions=positions
-        ) # suffix_out.shape: bs, action_seq, 2048 (action_vocab_size)
+        ) # suffix_out.shape: bs, action_seq, 2048 (action_vocab_size) : TODO: check the shape of suffix_out
 
         # 6. Compute loss on the masked tokens.
         # Project output features to logits over the action vocabulary.
@@ -454,6 +453,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         final_tokens, _, _ = jax.lax.fori_loop(
             0, num_steps, loop_body, (action_tokens, mask_to_be_predicted, decode_rng)
         )
-
+        
+        final_tokens = final_tokens[:, :18] # we only consider to return the first 14 token
         return final_tokens
     
