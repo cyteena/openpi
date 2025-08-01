@@ -80,7 +80,9 @@ class Pi0DiscreteFlowConfig(_model.BaseModelConfig):
     pg_vocab_size: int = tokenizer._paligemma_tokenizer.vocab_size()
     pg_skip_tokens: int = tokenizer._fast_skip_tokens  # Should be 128
     action_vocab_size: int = tokenizer._fast_tokenizer.vocab_size  # THIS IS 2048
-    mask_token_id: int = pg_vocab_size - 1 - pg_skip_tokens - action_vocab_size
+    
+    # we use this to calculate loss over [mask] id!
+    mask_token_id: int = pg_vocab_size - 1 - pg_skip_tokens - 306 # 306 is a local id for fast_tokenizer, and denote a sequence of 1024 0s.
 
     # # Config for the new Head
     # head_num_layers: int = 4
@@ -258,13 +260,13 @@ class Pi0DiscreteFlow(_model.BaseModel):
         """
         preprocess_rng, time_rng, mask_rng = jax.random.split(rng, 3)
         # only consider the valid action token
-        action_mask = observation.dfm_action_mask
+        # action_mask = observation.dfm_action_mask
 
         # 1. Preprocess observations and use pre-tokenized actions.
         # process image
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
         # x_1 are the ground truth tokens from data preprocessing (passed as actions), with global PaliGemma IDs.
-        x_1 = actions  # Shape: (B, S_a) - now actions are pre-tokenized
+        x_1 = observation.dfm_action_token  # Shape: (B, S_a) - now actions are pre-tokenized
         batch_size, seq_len = x_1.shape
 
         # For now, assume all tokens are valid (no padding mask)
@@ -323,18 +325,20 @@ class Pi0DiscreteFlow(_model.BaseModel):
 
         # Convert ground truth global PG tokens to local action indices for loss calculation.
         local_targets = self._pg_tokens_to_local_action_indices(x_1)
-        safe_local_targets = jnp.where(action_mask, local_targets, 0)
+        
+        # safe_local_targets = jnp.where(action_mask, local_targets, 0)
 
         # Calculate cross-entropy loss.
-        token_loss = optax.softmax_cross_entropy_with_integer_labels(logits, safe_local_targets)
+        token_loss = optax.softmax_cross_entropy_with_integer_labels(logits, local_targets)
 
         # Only consider the loss for the tokens that were actually masked.
-        masked_loss = (token_loss * tokens_to_mask) * action_mask
+        # masked_loss = (token_loss * tokens_to_mask) * action_mask
 
         # Normalize the loss by the number of masked tokens per sequence.
-        num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
+        num_masked_tokens = jnp.sum(tokens_to_mask, axis=-1)
+        # num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
         # Avoid division by zero if a sequence has no masked tokens (e.g., if t=1).
-        sequence_loss = jnp.sum(masked_loss, axis=-1) / jnp.maximum(1.0, num_masked_tokens)
+        sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) / jnp.maximum(1.0, num_masked_tokens)
 
         # Return the mean loss over the batch.
         return jnp.mean(sequence_loss)
