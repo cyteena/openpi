@@ -163,7 +163,7 @@ class FASTTokenizer:
         # For DFM action token we should directly get the raw action token,
         # can decoded by fasttokenizer
         # Decode predicted output tokens
-        return np.array(self._fast_tokenizer.decode(
+        return np.array(self._fast_tokenizer.decode_dfm(
             [tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
         )[0])
 
