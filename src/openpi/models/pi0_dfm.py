@@ -339,7 +339,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         num_masked_tokens = jnp.sum(tokens_to_mask, axis=-1)
         # num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
         # Avoid division by zero if a sequence has no masked tokens (e.g., if t=1).
-        sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) / # jnp.maximum(1.0, num_masked_tokens)
+        sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) #/ jnp.maximum(1.0, num_masked_tokens)
         sequence_loss = sequence_loss / (1 - time)
 
         # Return the mean loss over the batch.
