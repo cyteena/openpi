@@ -689,7 +689,7 @@ _CONFIGS = [
     # max_token_len: int = 120
     TrainConfig(
         name="pi0_dfm_libero",
-        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=30, max_text_token_len=64),
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=32, max_text_token_len=64),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),

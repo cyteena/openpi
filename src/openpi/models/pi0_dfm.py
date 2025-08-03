@@ -339,7 +339,10 @@ class Pi0DiscreteFlow(_model.BaseModel):
         num_masked_tokens = jnp.sum(tokens_to_mask, axis=-1)
         # num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
         # Avoid division by zero if a sequence has no masked tokens (e.g., if t=1).
-        sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) #/ jnp.maximum(1.0, num_masked_tokens)
+        
+        # we can consider to uncomment the devisor: loss at beginning is just too big
+        # in llada, it's been divided by all length
+        sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) / jnp.maximum(1.0, num_masked_tokens)
         sequence_loss = sequence_loss / (1 - time)
 
         # Return the mean loss over the batch.
@@ -351,7 +354,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         rng: at.KeyArrayLike,
         observation: _model.Observation,
         *,
-        num_steps: int | at.Int[at.Array, ""] = 10,
+        num_steps: int | at.Int[at.Array, ""] = 32,
     ) -> at.Int[at.Array, "b s_a"]:
         """
         Samples actions using iterative, parallel decoding (MaskGIT-style).
