@@ -277,6 +277,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
         # TODO: beta_sampling
         time = jax.random.beta(time_rng, 1, 1.5, shape=(batch_size,)) * 0.999 + 0.001
+        time = jnp.clip(time, 0., 1 - 1e-4)
 
         # Generate random noise for masking decision.
         rand_unif = jax.random.uniform(mask_rng, (batch_size, seq_len))
@@ -339,6 +340,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # num_masked_tokens = jnp.sum(tokens_to_mask * action_mask, axis=-1)
         # Avoid division by zero if a sequence has no masked tokens (e.g., if t=1).
         sequence_loss = jnp.sum(token_loss * tokens_to_mask, axis=-1) / jnp.maximum(1.0, num_masked_tokens)
+        sequence_loss = sequence_loss / (1 - time)
 
         # Return the mean loss over the batch.
         return jnp.mean(sequence_loss)
