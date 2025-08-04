@@ -671,7 +671,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi0_dfm_fast_libero",
-        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10),
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=32, max_text_token_len=64),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),
@@ -695,6 +695,16 @@ _CONFIGS = [
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_dfm_libero_action_expert_from_scratch",
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=32, max_text_token_len=64),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.PaliGemmaWeightLoader(),
         num_train_steps=30_000,
     ),
     #

@@ -276,7 +276,8 @@ class Pi0DiscreteFlow(_model.BaseModel):
         # 2. DFM forward process: sample t and create masked input x_t.
         # Sample time 't' from Uniform(0, 1]. 't' represents the ratio of kept tokens.
         # TODO: beta_sampling
-        time = jax.random.beta(time_rng, 1, 1.5, shape=(batch_size,)) * 0.999 + 0.001
+        time = jax.random.uniform(time_rng, shape=(batch_size,))
+        # time = jax.random.beta(time_rng, 1, 1.5, shape=(batch_size,)) * 0.999 + 0.001
         time = jnp.clip(time, 0., 1 - 1e-4)
 
         # Generate random noise for masking decision.
@@ -354,7 +355,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
         rng: at.KeyArrayLike,
         observation: _model.Observation,
         *,
-        num_steps: int | at.Int[at.Array, ""] = 32,
+        num_steps: int | at.Int[at.Array, ""] = 10,
     ) -> at.Int[at.Array, "b s_a"]:
         """
         Samples actions using iterative, parallel decoding (MaskGIT-style).
