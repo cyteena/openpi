@@ -11,6 +11,9 @@ __pycache__/
 *$py.class
 
 third_party/*
+visualizations/*
+visualizations_detailed/*
+*mp4
 
 # C extensions
 *.so
