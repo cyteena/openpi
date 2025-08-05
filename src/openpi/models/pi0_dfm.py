@@ -422,6 +422,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
             # e. MaskGIT logic to update tokens.
             # Get predicted token IDs and their confidence scores.
             predicted_local_ids = jnp.argmax(logits, axis=-1)
+            predicted_global_ids = self._local_action_indices_to_pg_tokens(predicted_local_ids)
 
             confidence = jnp.max(jax.nn.softmax(logits, axis=-1), axis=-1)
             # We only care about the confidence of currently masked tokens.
@@ -452,7 +453,7 @@ class Pi0DiscreteFlow(_model.BaseModel):
             )
 
             # f. Update the action tokens and the mask of tokens to be predicted.
-            new_action_tokens = jnp.where(unmask_update_mask, predicted_local_ids, action_tokens)
+            new_action_tokens = jnp.where(unmask_update_mask, predicted_global_ids, action_tokens)
             new_mask_to_be_predicted = jnp.logical_and(mask_to_be_predicted, ~unmask_update_mask)
 
             return new_action_tokens, new_mask_to_be_predicted, rng
