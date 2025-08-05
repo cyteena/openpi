@@ -49,7 +49,7 @@ def create_torch_dataloader(
     data_loader = _data_loader.TorchDataLoader(
         dataset,
         local_batch_size=batch_size,
-        num_workers=8,
+        num_workers=120,
         shuffle=shuffle,
         num_batches=num_batches,
     )
@@ -101,8 +101,12 @@ def main(config_name: str, max_frames: int | None = None):
     stats = {key: normalize.RunningStats() for key in keys}
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
+        # print(batch['actions'].shape) # (32, 10, 7)
+        # print(batch['state'].shape) # (32, 7)
         for key in keys:
-            values = np.asarray(batch[key][0])
+            values = np.asarray(batch[key]) # not only take the first batch
+            if len(values.shape) == 3:
+                values = values[:, 0, :] # only take the first action
             stats[key].update(values.reshape(-1, values.shape[-1]))
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
