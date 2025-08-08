@@ -130,7 +130,6 @@ class Normalize(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
-
         return apply_tree(
             data,
             self.norm_stats,
@@ -235,7 +234,7 @@ class RLDSDeltaActions(DataTransformFn):
         state, actions = data["state"], data["actions"]
         assert (len(actions.shape) - len(state.shape)) == 1, f"error with state shape:{state.shape}, action shape:{actions.shape}"
         mask = np.asarray(self.mask)
-        new_actions = actions.clone()
+        new_actions = np.copy(actions)  # 修复：使用 np.copy 而不是 .clone()
         idx = np.flatnonzero(mask)  
         for i in idx:
             new_actions[0, i] = actions[0, i] - state[i]
@@ -243,6 +242,7 @@ class RLDSDeltaActions(DataTransformFn):
         # normalize to [-pi, pi]
         new_actions[..., 3:6] = (new_actions[..., 3:6] + np.pi) % (2 * np.pi) - np.pi
         data["actions"] = new_actions
+        return data
         return data
 
 
@@ -283,12 +283,12 @@ class RLDSAbsoluteActions(DataTransformFn):
         state, actions = data["state"], data["actions"]
         assert (len(actions.shape) - len(state.shape)) == 1, f"error with state shape:{state.shape}, action shape:{actions.shape}"
         mask = np.asarray(self.mask)
-        new_actions = actions.clone()
+        new_actions = actions.copy()
         idx = np.flatnonzero(mask)
 
         for i in idx:
             new_actions[:, i] = np.cumsum(actions[:, i], axis=0)
-            new_actions[:, i] += state[i][:, None]
+            new_actions[:, i] += state[i]#[:, None]
         new_actions[..., 3:6] = (new_actions[..., 3:6] + np.pi) % (2 * np.pi) - np.pi
         data["actions"] = new_actions
         return data
