@@ -366,6 +366,7 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_DFM
         )
 
 
@@ -689,7 +690,7 @@ _CONFIGS = [
     # max_token_len: int = 120
     TrainConfig(
         name="pi0_dfm_libero",
-        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=32, max_text_token_len=64),
+        model=pi0_dfm.Pi0DiscreteFlowConfig(action_dim=7, action_horizon=10, max_action_token_len=44, max_text_token_len=64),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(prompt_from_task=True),

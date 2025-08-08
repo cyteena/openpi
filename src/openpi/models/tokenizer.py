@@ -163,8 +163,10 @@ class FASTTokenizer:
         # For DFM action token we should directly get the raw action token,
         # can decoded by fasttokenizer
         # Decode predicted output tokens
+        action_tokens = self._act_tokens_to_paligemma_tokens(tokens)
+        print(f"decoded local {action_tokens=}")
         return np.array(self._fast_tokenizer.decode_dfm(
-            [tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
+            [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
         )[0])
 
     def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
