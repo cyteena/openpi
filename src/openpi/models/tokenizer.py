@@ -154,6 +154,7 @@ class FASTTokenizer:
         raw_action_tokens = np.array(
             self._paligemma_tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
         )
+        # same function to shift tokens between local and global
         action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
         return self._fast_tokenizer.decode(
             [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
@@ -163,8 +164,8 @@ class FASTTokenizer:
         # For DFM action token we should directly get the raw action token,
         # can decoded by fasttokenizer
         # Decode predicted output tokens
+        # tokens: should be global, action_token : local
         action_tokens = self._act_tokens_to_paligemma_tokens(tokens)
-        print(f"decoded local {action_tokens=}")
         return np.array(self._fast_tokenizer.decode_dfm(
             [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
         )[0])
