@@ -190,6 +190,10 @@ class BinningTokenizer:
     def __init__(self, max_len: int = 256, n_bins: int = 256):
         self._max_len = max_len
         self._n_bins = n_bins
+        
+        self.min_action = -1.0
+        self.max_action = 1.0
+        self.bins       = np.linspace(self.min_action, self.max_action, self._n_bins)
 
         # Download base PaliGemma tokenizer
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
@@ -197,6 +201,23 @@ class BinningTokenizer:
             self._paligemma_tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
         self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
+        
+    @property
+    def vocab_size(self) -> int:
+        return self._paligemma_tokenizer.vocab_size()
+    
+    @property
+    def skip_tokens(self) -> int:
+        return self._fast_skip_tokens
+        
+    def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
+        """
+        0-based action bin → 词表末尾 token id
+        """
+        if isinstance(tokens, list):
+            tokens = np.array(tokens)
+        return self._paligemma_tokenizer.vocab_size() - 1 - self._fast_skip_tokens - tokens
+        
 
     def tokenize(
         self, prompt: str, state: np.ndarray, actions: np.ndarray | None
@@ -225,9 +246,13 @@ class BinningTokenizer:
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
-            raise NotImplementedError("BinningTokenizer does not support encoding actions atm (only for inference use)")
-        postfix_tokens = []
-
+            # raise NotImplementedError("BinningTokenizer does not support encoding actions atm (only for inference use)")
+            actions = np.clip(actions, self.min_action, self.max_action)
+            bins = np.linspace(self.min_action, self.max_action, self._n_bins + 1) 
+            discretized_action = np.digitize(actions, bins) - 1
+            discretized_action = np.clip(discretized_action, 0, self._n_bins - 1)
+            postfix_tokens = self._act_tokens_to_paligemma_tokens(discretized_action.flatten()).tolist()
+            
         # Create output token sequence & masks
         # AR mask is 0 on prefix (bidirectional attention) and 1 on postfix (causal attention to all previous tokens)
         tokens = prefix_tokens + postfix_tokens
@@ -255,20 +280,44 @@ class BinningTokenizer:
             loss_mask = loss_mask[: self._max_len]
 
         return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
+    
+    def action_tokenize(self, actions: np.ndarray, max_action_token_len: int, mask_token_id_pg: int) -> np.ndarray:
+        """
+        Tokenize actions using the FAST tokenizer and map to PaliGemma tokens.
+        """
+        actions = np.clip(actions, self.min_action, self.max_action)
+        bins = np.linspace(self.min_action, self.max_action, self._n_bins + 1) 
+        discretized_action = np.digitize(actions, bins) - 1
+        discretized_action = np.clip(discretized_action, 0, self._n_bins - 1)
+        postfix_tokens = self._act_tokens_to_paligemma_tokens(discretized_action.flatten()).tolist()
+        postfix_tokens_mask = [True] * max_action_token_len
+        if len(postfix_tokens) < max_action_token_len:
+            padding = [mask_token_id_pg] * (max_action_token_len - len(postfix_tokens))
+            postfix_tokens += padding
+        else:
+            if len(postfix_tokens) > max_action_token_len:
+                logging.warning(
+                    f"Action token length ({len(postfix_tokens)}) exceeds max length ({max_action_token_len}), "
+                    "truncating. Consider increasing the `max_action_token_len` in your model config if this happens frequently."
+                )
+            postfix_tokens = postfix_tokens[:max_action_token_len]
+            postfix_tokens_mask = postfix_tokens_mask[:max_action_token_len]
+
+        return np.asarray(postfix_tokens), np.asarray(postfix_tokens_mask)
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens
-        decoded_tokens = self._paligemma_tokenizer.decode(tokens.tolist())
+        decoded_tokens = np.array(self._paligemma_tokenizer.decode(tokens.tolist()))
 
-        # Extract actions from FAST model outputs
-        if "Action: " not in decoded_tokens:
-            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+        # # Extract actions from FAST model outputs
+        # if "Action: " not in decoded_tokens:
+        #     return np.zeros((action_horizon, action_dim), dtype=np.float32)
 
         # Extract actions from decoded tokens
-        raw_action_tokens = np.array(
-            self._paligemma_tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
-        )
-        action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
+        # raw_action_tokens = np.array(
+        #     self._paligemma_tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
+        # )
+        action_tokens = self._act_tokens_to_paligemma_tokens(decoded_tokens)
         if len(action_tokens) < action_horizon * action_dim:
             return np.zeros([action_horizon, action_dim], dtype=np.float32)
         action_tokens = action_tokens[: (action_horizon * action_dim)].reshape([action_horizon, action_dim])
