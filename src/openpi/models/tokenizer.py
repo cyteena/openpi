@@ -165,6 +165,7 @@ class FASTTokenizer:
         # can decoded by fasttokenizer
         # Decode predicted output tokens
         # tokens: should be global, action_token : local
+        # return the real action sequence, not just the action tokenization
         action_tokens = self._act_tokens_to_paligemma_tokens(tokens)
         return np.array(self._fast_tokenizer.decode_dfm(
             [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim

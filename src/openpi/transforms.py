@@ -328,7 +328,7 @@ class TokenizeFASTInputs(DataTransformFn):
             "token_ar_mask": ar_mask,
             "token_loss_mask": loss_mask,
         }
-
+        
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeDFMLangState(DataTransformFn):
@@ -359,7 +359,7 @@ class TokenizeDFMLangState(DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeDFMActionInput(DataTransformFn):
-    tokenizer: _tokenizer.FASTTokenizer
+    tokenizer: _tokenizer.FASTTokenizer | _tokenizer.BinningTokenizer
     max_action_token_len: int
     mask_token_id_pg: int
 
@@ -369,10 +369,11 @@ class TokenizeDFMActionInput(DataTransformFn):
         
         action_token_pg_mask, action_token_pg = None, None
         
-        if actions is not None:
+        if actions is not None: 
             action_token_pg, action_token_pg_mask = self.tokenizer.action_tokenize(
                 actions, max_action_token_len=self.max_action_token_len, mask_token_id_pg=self.mask_token_id_pg
             )
+    
         return {**data, "action_token_pg": action_token_pg, "action_token_pg_mask": action_token_pg_mask}
 
 
@@ -393,18 +394,23 @@ class ExtractFASTActions(DataTransformFn):
             "actions": actions,
         }
         
+        
 @dataclasses.dataclass(frozen=True)
 class ExtractDFM_FASTActions(DataTransformFn):
-    tokenizer: _tokenizer.FASTTokenizer
+    tokenizer: _tokenizer.FASTTokenizer | _tokenizer.BinningTokenizer
     action_horizon: int
     action_dim: int
+    used_bin: bool = False
 
     def __call__(self, data: DataDict) -> DataDict:
         if "actions" not in data:
             return data
         # Model outputs are saved in "actions", but for FAST models they represent tokens.
         tokens = data.pop("actions")
-        actions = self.tokenizer.extract_dfm_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+        if self.used_bin is False:
+            actions = self.tokenizer.extract_dfm_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+        else:
+            actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
         
         return {
             **data,

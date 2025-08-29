@@ -17,6 +17,7 @@ import openpi.models.model as _model
 import openpi.models.pi0 as pi0
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.pi0_dfm as pi0_dfm
+import openpi.models.pi0_dfm_bin as pi0_dfm_bin
 import openpi.models.pi0_fast_dfm as pi0_fast_dfm
 import openpi.models.pi0_dfm_ar as pi0_dfm_ar
 import openpi.models.tokenizer as _tokenizer
@@ -178,7 +179,32 @@ class ModelTransformFactory(GroupFactory):
                             action_dim=model_config.action_dim,
                         )
                     ],
-                )      
+                )  
+                
+            case _model.ModelType.PI0_DFM_BIN:
+                # PI0_DFM uses action tokenization in data preprocessing to avoid redundant computation
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizeDFMLangState(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_text_token_len)
+                        ),
+                        _transforms.TokenizeDFMActionInput(
+                            _tokenizer.BinningTokenizer(model_config.max_action_token_len),
+                            max_action_token_len=model_config.max_action_token_len,
+                            mask_token_id_pg=model_config.mask_token_id
+                        ),
+                    ],
+                    outputs=[
+                        _transforms.ExtractDFM_FASTActions(
+                            _tokenizer.BinningTokenizer(model_config.max_token_len),
+                            action_horizon=model_config.action_horizon,
+                            action_dim=model_config.action_dim,
+                            used_bin=True
+                        )
+                    ],
+                )     
 
             case _model.ModelType.PI0_FAST_DFM: # we keep it same as the pi0-fast
                 tokenizer_cls = (
@@ -778,6 +804,17 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=30_000,
     ),
+    TrainConfig(
+        name="pi0_dfm_bin_libero",
+        model=pi0_dfm_bin.Pi0DiscreteFlowBINConfig(action_dim=7, action_horizon=10, max_token_len=128),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+    ),
+    
     TrainConfig(
         name="pi0_dfm_ar_libero",
         model=pi0_dfm_ar.Pi0DiscreteFlowARConfig(action_dim=7, action_horizon=10, max_action_token_len=44, max_text_token_len=64),
